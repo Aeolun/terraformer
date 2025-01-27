@@ -12,6 +12,24 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Update version.go
+        run: |
+          sed -i 's/const version = ".*"/const version = "${{ github.event.inputs.version }}"/' cmd/version.go
+          
+      - name: Commit version bump
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add cmd/version.go
+          git commit -m "chore: bump version to ${{ github.event.inputs.version }}"
+          git tag ${{ github.event.inputs.version }}
+          git push
+          git push --tags
+          
       - name: Install Go
         uses: actions/setup-go@v5
         with:
@@ -30,10 +48,18 @@ jobs:
       - name: Build for all providers
         run: go run build/multi-build/main.go
 
-      - uses: "marvinpinto/action-automatic-releases@latest"
+      - name: Publish Release
+        uses: release-drafter/release-drafter@v5
         with:
-          repo_token: "${{ secrets.GITHUB_TOKEN }}"
-          automatic_release_tag: ${{ github.event.inputs.version }}
-          prerelease: false
-          files: |
-            terraformer-*
+          publish: true
+          tag: ${{ github.event.inputs.version }}
+          name: ${{ github.event.inputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          files: terraformer-*
+          token: ${{ secrets.GITHUB_TOKEN }}
