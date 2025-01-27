@@ -53,6 +53,8 @@ jobs:
           draft: false
           pushTag: true
           releaseTag: ${{ github.event.inputs.version }}
+          versionPrefix: v
+          tagPrefix: ''
           templatePath: release-template.md
 
       - name: Upload Release Assets
