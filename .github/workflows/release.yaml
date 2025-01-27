@@ -3,48 +3,157 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Bump Version
+        description: Bump Version (no v prefix)
         required: true
 jobs:
-  tagged-release:
-    name: "Tagged Release"
+  prepare:
+    name: "Prepare Release"
     runs-on: "ubuntu-latest"
-
+    outputs:
+      version: ${{ github.event.inputs.version }}
+      providers: ${{ steps.get-providers.outputs.list }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
           
-      - name: Update version.go
-        run: |
-          sed -i 's/const version = ".*"/const version = "${{ github.event.inputs.version }}"/' cmd/version.go
-          
-      - name: Commit version bump
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add cmd/version.go
-          git commit -m "chore: bump version to ${{ github.event.inputs.version }}"
-          git push
-          
       - name: Install Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+
       - name: Test
         run: go build -v && go test ./...
-      - name: Build for linux/amd64
-        run: go build -o terraformer-all-linux-amd64
-      - name: Build for linux/arm64
-        run: GOOS=linux GOARCH=arm64 go build -o terraformer-all-linux-arm64
-      - name: Build for mac
-        run: GOOS=darwin go build -o terraformer-all-darwin-amd64
-      - name: Build for mac Apple Silicon
-        run: GOOS=darwin GOARCH=arm64 go build -o terraformer-all-darwin-arm64
-      - name: Build for all providers
-        run: go run build/multi-build/main.go
+
+      - name: Get provider list
+        id: get-providers
+        run: |
+          PROVIDERS=$(ls cmd/provider_cmd_*.go | sed 's/cmd\/provider_cmd_//g' | sed 's/\.go//g' | jq -R -s -c 'split("\n")[:-1]')
+          echo "list=$PROVIDERS" >> $GITHUB_OUTPUT
+
+  build-platforms:
+    needs: prepare
+    name: "Build Platform Artifacts"
+    runs-on: "ubuntu-latest"
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            suffix: linux-amd64
+          - os: linux
+            arch: arm64
+            suffix: linux-arm64
+          - os: darwin
+            arch: amd64
+            suffix: darwin-amd64
+          - os: darwin
+            arch: arm64
+            suffix: darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Update version.go
+        run: |
+          sed -i 's/const version = ".*"/const version = "${{ needs.prepare.outputs.version }}"/' cmd/version.go
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build for ${{ matrix.os }}/${{ matrix.arch }}
+        run: GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} go build -o terraformer-all-${{ matrix.suffix }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraformer-all-${{ matrix.suffix }}
+          path: terraformer-all-${{ matrix.suffix }}
+
+  build-providers:
+    needs: prepare
+    name: "Build Provider Artifacts"
+    runs-on: "ubuntu-latest"
+    strategy:
+      matrix:
+        provider: ${{ fromJson(needs.prepare.outputs.providers) }}
+        os: [linux, windows, darwin]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Update version.go
+        run: |
+          sed -i 's/const version = ".*"/const version = "${{ needs.prepare.outputs.version }}"/' cmd/version.go
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup build environment
+        run: |
+          mkdir -p cmd/tmp
+          # Move other provider files to tmp
+          for f in cmd/provider_cmd_*.go; do
+            if [[ "$f" != "cmd/provider_cmd_${{ matrix.provider }}.go" ]]; then
+              mv "$f" cmd/tmp/
+            fi
+          done
+          # Comment out other providers in root.go
+          sed -i '/[Nn]ew.*[Pp]rovider/s/^/\/\/ /' cmd/root.go
+          sed -i '/[Nn]ew.*[Ii]mporter/s/^/\/\/ /' cmd/root.go
+          # Uncomment our provider
+          sed -i "/[Nn]ew.*${{ matrix.provider }}[Pp]rovider/s/\/\/ //" cmd/root.go
+          sed -i "/[Nn]ew.*${{ matrix.provider }}[Ii]mporter/s/\/\/ //" cmd/root.go
+
+      - name: Build provider (amd64)
+        run: |
+          SUFFIX="${{ matrix.os == 'windows' && '.exe' || '' }}"
+          GOOS=${{ matrix.os }} GOARCH=amd64 go build -v -o "terraformer-${{ matrix.provider }}-${{ matrix.os }}-amd64$SUFFIX"
+
+      - name: Build provider (arm64)
+        run: |
+          SUFFIX="${{ matrix.os == 'windows' && '.exe' || '' }}"
+          GOOS=${{ matrix.os }} GOARCH=arm64 go build -v -o "terraformer-${{ matrix.provider }}-${{ matrix.os }}-arm64$SUFFIX"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraformer-${{ matrix.provider }}-${{ matrix.os }}
+          path: terraformer-${{ matrix.provider }}-${{ matrix.os }}-*
+
+  create-release:
+    needs: [prepare, build-platforms, build-providers]
+    name: "Create Release"
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Update version.go
+        run: |
+          sed -i 's/const version = ".*"/const version = "${{ needs.prepare.outputs.version }}"/' cmd/version.go
+
+      - name: Commit version bump
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add cmd/version.go
+          git commit -m "chore: bump version to ${{ needs.prepare.outputs.version }}"
+          git push
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
 
       - name: Create Release
         uses: aeolun/release-wizard@v3
@@ -52,7 +161,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
           pushTag: true
-          releaseTag: ${{ github.event.inputs.version }}
+          releaseTag: ${{ needs.prepare.outputs.version }}
           versionPrefix: v
           tagPrefix: ''
           templatePath: release-template.md
@@ -60,6 +169,7 @@ jobs:
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          files: terraformer-*
+          tag_name: ${{ needs.prepare.outputs.version }}
+          name: v${{ needs.prepare.outputs.version }}
+          files: artifacts/terraformer-*
           token: ${{ secrets.GITHUB_TOKEN }}
