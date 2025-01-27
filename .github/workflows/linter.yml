@@ -12,6 +12,10 @@ jobs:
   linter:
     name: golangci-lint
     runs-on: ubuntu-latest
+    concurrency:
+      # group by branch name
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
     steps:
     - name: Check out code into the Go module directory
       uses: actions/checkout@v4

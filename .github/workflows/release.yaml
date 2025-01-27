@@ -47,7 +47,7 @@ jobs:
         run: go run build/multi-build/main.go
 
       - name: Create Release
-        uses: darioblanco/release-wizard@v2
+        uses: aeolun/release-wizard@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false

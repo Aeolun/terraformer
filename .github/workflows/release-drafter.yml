@@ -4,16 +4,18 @@ on:
   push:
     branches:
       - master
-  pull_request:
-    types: [opened, reopened, synchronize]
 
 jobs:
   update_release_draft:
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
-      - uses: darioblanco/release-wizard@v2
+      - uses: aeolun/release-wizard@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: true
+          withV: true
           templatePath: release-template.md 
