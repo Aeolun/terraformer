@@ -15,7 +15,7 @@ jobs:
         platform: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.platform }}
     concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}
+      group: ${{ github.workflow }}-${{ matrix.platform}}-${{ github.ref }}
       cancel-in-progress: true
     steps:
     - uses: actions/checkout@v4
